@@ -14,8 +14,7 @@ SentryFlow uses a **Two-Speed Architecture** to decouple critical-path decisions
 
 2. **The Ensemble Engine:**
     * **XGBoost:** Supervised learning for known fraud patterns (Social Engineering, ATO).
-   * **Isolation Forest:** Unsupervised anomaly detection for "Zero-Day" synthetic identity clusters.
-
+    * **Isolation Forest:** Unsupervised anomaly detection for "Zero-Day" synthetic identity clusters.
 
 3. **Shadow-SHAP Worker (Asynchronous):**
    * Fires a background thread via `async_explain.py` immediately after the response is sent.
