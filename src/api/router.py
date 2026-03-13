@@ -23,7 +23,12 @@ async def risk_check(payload: dict):
     input_df = pd.DataFrame([payload])
     ml_score = 0.0
     if ML_MODEL:
-        ml_score = float(ML_MODEL.predict_proba(input_df)[:, 1][0])
+        proba = ML_MODEL.predict_proba(input_df)
+        # Handle both numpy arrays and lists (MockModel returns list)
+        if hasattr(proba, 'shape'):  # numpy array
+            ml_score = float(proba[0, 1])
+        else:  # list
+            ml_score = float(proba[0][1])
 
     # 3. BRIDGE THE GAP: Use the SAME orchestration as the dashboard
     rule_df = pd.DataFrame([rule_res])
