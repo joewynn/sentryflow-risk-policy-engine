@@ -1,16 +1,27 @@
-setup:
-	pip install -r requirements.txt
-	kaggle datasets download -d ieee-fraud-detection -p data/
-	unzip -o data/ieee-fraud-detection.zip -d data/
+# Dockerfile
+FROM python:3.12.8-slim
 
-lint:
-	ruff check src/ tests/
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
-train:
-	python -m metaflow run pipelines/backtest_flow.py --package-suffixes .py
+WORKDIR /app
 
-deploy:
-	python src/pipeline/sentryflow_pipeline.py --deploy-endpoint
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-test:
-	pytest tests/
+# Copy requirements and install
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the application
+COPY . .
+
+# Expose the FastAPI port
+EXPOSE 8000
+
+# Command to run the application
+CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

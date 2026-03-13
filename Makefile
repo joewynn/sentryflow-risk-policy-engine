@@ -14,3 +14,12 @@ deploy:
 
 test:
 	pytest tests/
+
+up:
+	docker-compose up --build
+
+down:
+	docker-compose down
+
+# Run the full suite: Setup data, build containers, and start services
+ship-it: setup up

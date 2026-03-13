@@ -1,7 +1,5 @@
 from fastapi import FastAPI
 from src.api.router import get_risk
-
-from fastapi import FastAPI
 from src.api.router import app as sentry_app
 
 app = sentry_app  # Re-export the app from router.py
