@@ -1,51 +1,67 @@
-from jsonlogic import jsonLogic
+# src/policies/evaluator.py
+from json_logic import jsonLogic as json_logic  # Alias to maintain snake_case usability
 import uuid
 from datetime import datetime
-import json
-from typing import List, Dict
 
-# Severity map: higher = more restrictive
-SEVERITY = {
-    "NONE": 0,
-    "REQUIRE_MFA": 1,
-    "DELAY_4H": 2,
-    "REQUIRE_VIDEO": 3,
-    "BLOCK": 4
-}
-
-def evaluate_policy(rules: List[Dict], data: Dict) -> Dict:
-    """Highest Severity wins + full audit trace (Nacha-compliant)"""
-    triggered = []
-    highest_action = "NONE"
-    highest_score = 0
-
+def evaluate_policy(rules: list, data: dict) -> dict:
+    """
+    Evaluates a list of JsonLogic rules against transaction data.
+    Implements Highest-Severity conflict resolution.
+    """
+    triggered_actions = []
+    
+    # 1. Run each rule
     for rule in rules:
-        result = jsonLogic(rule, data)
-        if result:
-            action = rule.get("action", "NONE")
-            score = SEVERITY.get(action, 0)
-            triggered.append({"rule": rule, "action": action})
-            if score > highest_score:
-                highest_score = score
-                highest_action = action
-
-    audit_log = {
-        "decision_id": str(uuid.uuid4()),
-        "timestamp": datetime.utcnow().isoformat(),
-        "policy_version": "v2026.03",
-        "model_version": "v4.1",
-        "rules_evaluated": len(rules),
-        "triggered_rules": triggered,
-        "final_action": highest_action,
-        "severity_score": highest_score,
-        "input_hash": hash(json.dumps(data, sort_keys=True))
+        try:
+            # Ensure the rule is a non-empty dictionary before passing to library
+            if isinstance(rule, dict) and len(rule) > 0:
+                
+                # Check if it's our wrapped structure {"if": logic, "action": name}
+                if "if" in rule:
+                    condition = rule["if"]
+                    action = rule.get("action", "REVIEW")
+                    if json_logic(condition, data):
+                        triggered_actions.append(action)
+                else:
+                    # It's a raw JsonLogic rule (e.g., {"==": [...]})
+                    if json_logic(rule, data):
+                        triggered_actions.append("DECLINE")
+        except Exception as e:
+            # Graceful degradation: log error but don't crash the whole risk check
+            print(f"Rule Evaluation Error: {str(e)}")
+            continue
+            
+    # 2. Highest-Severity Conflict Resolution
+    # Hierarchy: DECLINE > REQUIRE_VIDEO > REQUIRE_MFA > DELAY_4H > APPROVE
+    severity_map = {
+        "DECLINE": 5,
+        "REQUIRE_VIDEO": 4,
+        "REQUIRE_MFA": 3,
+        "DELAY_4H": 2,
+        "APPROVE": 1
     }
+    
+    final_action = "APPROVE"
+    if triggered_actions:
+        final_action = max(triggered_actions, key=lambda x: severity_map.get(x, 0))
 
-    print(f"[AUDIT] {audit_log}")  # In prod → S3/Snowflake
+    # 3. Generate Nacha-compliant Adverse Action Notice (AAN)
+    aan_map = {
+        "DECLINE": ("R03", "Security verification failed."),
+        "REQUIRE_VIDEO": ("R01", "Additional identity verification required."),
+        "REQUIRE_MFA": ("R01", "Step-up authentication required.")
+    }
+    
+    code, msg = aan_map.get(final_action, (None, None))
+
     return {
-        "decision": "BLOCK" if highest_action == "BLOCK" else "ALLOW",
-        "action": highest_action,
-        "adverse_action_code": "R03" if highest_action != "NONE" else None,
-        "customer_facing_message": "We couldn't verify your device security. Please try a different browser." if highest_action != "NONE" else None,
-        "audit": audit_log
+        "decision": "BLOCK" if severity_map.get(final_action, 0) > 3 else "PASS",
+        "action": final_action,
+        "adverse_action_code": code,
+        "customer_facing_message": msg,
+        "audit": {
+            "decision_id": str(uuid.uuid4()),
+            "timestamp": datetime.utcnow().isoformat(),
+            "triggered_rules_count": len(triggered_actions)
+        }
     }

@@ -16,7 +16,6 @@ services:
       - .:/app
     networks:
       - sentryflow-network
-
   # Redis for <30ms Caching & Frequency Counters
   redis:
     image: redis:7.2-alpine
@@ -25,6 +24,14 @@ services:
       - "6379:6379"
     networks:
       - sentryflow-network
+  # The Monitoring Dashboard
+  sentryflow-dashboard:
+    build: .
+    command: streamlit run research/monitoring_dashboard.py --server.address=0.0.0.0
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
 
 networks:
   sentryflow-network:
