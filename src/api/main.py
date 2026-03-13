@@ -1,12 +1,11 @@
 from fastapi import FastAPI
-from src.api.router import get_risk
-from src.api.router import app as sentry_app
+from src.api.router import router
 
-app = sentry_app  # Re-export the app from router.py
+# Create the FastAPI application
+app = FastAPI(title="SentryFlow Risk Engine", version="2026.03")
 
-@app.post("/v1/risk-score")
-async def risk_score(payload: dict):
-    return get_risk(payload)
+# Include the router with all endpoints
+app.include_router(router)
 
 if __name__ == "__main__":
     import uvicorn

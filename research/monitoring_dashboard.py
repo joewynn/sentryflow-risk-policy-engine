@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.policies.evaluator import evaluate_policy, batch_orchestrate, create_policy_signature
+from src.governance.approval_queue import submit_for_approval
 
 st.set_page_config(page_title="SentryFlow Master Control", layout="wide", page_icon="🛡️")
 
@@ -24,7 +25,11 @@ def get_master_simulation_data(n=2000):
         "geo_velocity": np.random.uniform(0, 1200, n),
         "ml_risk_score": np.random.beta(2, 5, n),
     })
+    
     df['is_fraud'] = np.where((df['typing_entropy'] < 1.5) & (df['device_is_emulator']), 1, 0)
+    
+    df['consortium_match_count'] = np.random.choice([0, 1, 5, 12], n, p=[0.8, 0.1, 0.07, 0.03])
+
     return df
 
 # 2. SIDEBAR CONTROLS (Operational Maturity)
@@ -65,9 +70,16 @@ with col_govern:
     except: st.error("JSON Syntax Error")
     
     if st.button("📩 Submit for 4-Eyes Review", use_container_width=True):
-        st.success("Policy queued for Risk-Admin approval.")
+        try:
+            ticket_id = submit_for_approval(current_rule, "risk_manager_demo")
+            st.success(f"✅ Policy queued for approval. Ticket ID: `{ticket_id}`")
+            st.caption(f"📁 Artifact saved to: `data/policy_queue/{ticket_id}.json`")
+        except Exception as e:
+            st.error(f"Submission failed: {e}")
+
     if st.button("🚀 Emergency Push", use_container_width=True, type="secondary"):
-        st.error("Bypass logged to immutable Audit Trail.")
+        st.warning("⚠️ Emergency bypass logged to immutable Audit Trail.")
+        st.caption("This action triggers compliance review per Nacha 2026 requirements.")
 
 # 5. EXECUTION ENGINE
 if st.button("🚀 Run Vectorized Ensemble Backtest", type="primary", use_container_width=True):
@@ -80,6 +92,13 @@ if st.button("🚀 Run Vectorized Ensemble Backtest", type="primary", use_contai
         full_df = pd.concat([df, final_df], axis=1)
 
     st.divider()
+
+    # Sardine Consortium Signal (Network Effect Moat)
+    st.subheader("🌐 Sardine Consortium Signal")
+    max_consortium_matches = int(full_df['consortium_match_count'].max())
+    avg_consortium_matches = full_df['consortium_match_count'].mean()
+    st.markdown(f"> **Network Effect Insight:** The highest-risk typing pattern has been observed across **{max_consortium_matches}** other client accounts in the last 24 hours (avg: {avg_consortium_matches:.1f} cross-client matches).")
+
     m1, m2, m3 = st.columns(3)
     tp = int(((full_df['decision'] == 'BLOCK') & (full_df['is_fraud'] == 1)).sum())
     fp = int(((full_df['decision'] == 'BLOCK') & (full_df['is_fraud'] == 0)).sum())

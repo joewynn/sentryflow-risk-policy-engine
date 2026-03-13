@@ -46,30 +46,46 @@ class SentryFlowBacktestFlow(FlowSpec):
         
         # Using the logic from src/models/train.py
         self.xgb_model, self.iso_forest = train_ensemble(X, y)
-        self.next(self.shadow_backtest)
+        self.next(self.backtest)
 
     @step
-    def shadow_backtest(self):
-        """3. Governance: Executing the Shadow Mode Backtest."""
-        print("Executing Shadow Backtest against candidate policy...")
-        
+    def backtest(self):
+        """3. Governance: Executing the Shadow Mode Backtest with ML Orchestration."""
+        from src.policies.evaluator import batch_orchestrate
+
+        print("Executing Shadow Backtest with Ensemble Orchestration...")
+
+        # Define candidate policy
         candidate_rule = {
             "if": {"and": [{"==": [{"var": "device_is_emulator"}, True]}, {">": [{"var": "geo_velocity"}, 500]}]},
             "action": "REQUIRE_VIDEO_ID"
         }
-        
-        # Apply the policy
-        results = self.data.apply(lambda row: evaluate_policy([candidate_rule], row.to_dict()), axis=1)
-        self.data['decision'] = [r['decision'] for r in results]
-        
-        # Calculate Backtest Metrics
-        tp = len(self.data[(self.data['decision'] == 'BLOCK') & (self.data['is_fraud'] == 1)])
-        fp = len(self.data[(self.data['decision'] == 'BLOCK') & (self.data['is_fraud'] == 0)])
-        
+
+        # Run Rule logic
+        rule_results = self.data.apply(lambda r: evaluate_policy([candidate_rule], r.to_dict()), axis=1)
+        rule_df = pd.DataFrame(list(rule_results))
+
+        # Run ML scores
+        X_features = self.data[["amount", "geo_velocity", "typing_entropy", "device_is_emulator"]]
+        ml_scores = self.xgb_model.predict_proba(X_features)[:, 1]
+
+        # THE FIX: Sync orchestration (matches API + Dashboard logic)
+        orchestrated = batch_orchestrate(rule_df, pd.Series(ml_scores))
+
+        # Save the Strategy as a searchable artifact
+        self.data['strategy'] = orchestrated['strategy']
+        self.data['final_decision'] = orchestrated['decision']
+
+        # Metric Calculation on ORCHESTRATED results
+        tp = len(self.data[(self.data['final_decision'] == 'BLOCK') & (self.data['is_fraud'] == 1)])
+        fp = len(self.data[(self.data['final_decision'] == 'BLOCK') & (self.data['is_fraud'] == 0)])
+        fn = len(self.data[(self.data['final_decision'] == 'PASS') & (self.data['is_fraud'] == 1)])
+
         self.precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-        self.recall = tp / (self.data['is_fraud'].sum())
-        
-        print(f"Backtest Results -> Recall: {self.recall:.2%}, FPR: {1-self.precision:.2%}")
+        self.recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+
+        print(f"Backtest Results -> Precision: {self.precision:.2%}, Recall: {self.recall:.2%}, FPR: {1-self.precision:.2%}")
+
         self.next(self.approval_gate)
 
     @step

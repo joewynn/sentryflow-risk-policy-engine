@@ -6,3 +6,4 @@ __pycache__/
 .ipynb_checkpoints
 mlruns/
 docs/project-private.md
+docs/INTERVIEW_PREP.md
