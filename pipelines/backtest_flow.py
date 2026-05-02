@@ -182,7 +182,8 @@ class SentryFlowBacktestFlow(FlowSpec):
                 from src.features.graph_features import build_shared_identity_graph, extract_graph_features
                 G = build_shared_identity_graph(df)
                 gf = extract_graph_features(G, df)
-                df = df.join(gf)
+                # Merge graph features by TransactionID (gf has TransactionID index)
+                df = df.merge(gf.reset_index(), on="TransactionID", how="left")
                 print(f"  Graph: {G.number_of_nodes():,} nodes, {G.number_of_edges():,} edges")
             except Exception as e:
                 # Gracefully handle graph build failure by creating default features
