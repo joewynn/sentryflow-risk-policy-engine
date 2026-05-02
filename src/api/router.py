@@ -18,10 +18,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Tier 1 Scaling: model loaded once at module startup (warm path — no per-request I/O)
-try:
-    ML_MODEL = load_model("xgb_fraud_v2026")
-except Exception:
-    ML_MODEL = load_model()  # falls back to default name "xgb_fraud"
+# Loads xgb_fraud_latest.joblib (updated on each approved training run)
+ML_MODEL = load_model()
 
 _DEFAULT_RULE = [{"if": {"==": [{"var": "device_is_emulator"}, True]}, "action": "DECLINE"}]
 
@@ -45,6 +43,16 @@ class RiskPayload(BaseModel):
     typing_entropy: float = Field(default=3.0, ge=0.0, le=6.0, description="Risk proxy: behavioral anomaly (0-6)")
     card_count: Optional[float] = Field(default=1.0, ge=0, le=50, description="Number of cards on billing address")
     days_since_last_tx: Optional[float] = Field(default=30.0, ge=0, le=365, description="Days since last transaction on card")
+    # Phase 2: Account enrichment features (batch-only — require aggregation history, default to neutral)
+    uid_tx_count: Optional[float] = Field(default=5.0, ge=0, le=1000, description="Transactions on unique customer ID")
+    uid_amt_mean: Optional[float] = Field(default=None, description="Average transaction amount per UID")
+    uid_amt_std: Optional[float] = Field(default=0.0, ge=0, le=1000, description="Variance in spending per UID")
+    email_domain_risk: Optional[int] = Field(default=0, ge=0, le=1, description="Binary: risky email domain")
+    email_domain_freq: Optional[float] = Field(default=0.01, ge=0.0, le=1.0, description="Rarity of email domain")
+    card1_addr1_freq: Optional[float] = Field(default=1.0, ge=0, le=1000, description="Frequency of card+address pairs")
+    tx_hour: Optional[int] = Field(default=12, ge=0, le=23, description="Hour of day (0-23)")
+    is_late_night: Optional[int] = Field(default=0, ge=0, le=1, description="Binary: transaction 22:00-05:00")
+    D2_norm: Optional[float] = Field(default=0.0, ge=-365, le=365, description="Days since 2nd-to-last tx, normalized")
 
 
 @router.post("/v1/risk-check")

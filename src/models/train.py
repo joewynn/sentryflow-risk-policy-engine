@@ -14,6 +14,7 @@ import time
 MODEL_DIR = "data/models"
 DEFAULT_XGB_NAME = "xgb_fraud"
 FEATURE_COLS = [
+    # Phase 1: Core DIBB signals (6 features)
     "amount",
     "device_is_emulator",
     "geo_velocity",

@@ -19,9 +19,8 @@ SEVERITY_MAP = {
     "APPROVE": 1
 }
 
-# Ensemble thresholds calibrated on v2026.03 validation set (precision-recall curve, 2026-03-15).
-# ML_CRITICAL: model confidence > 92% overrides a rule-based PASS → REQUIRE_VIDEO_ID
-# ML_FRICTION: 75–92% confidence adds MFA friction, reducing FPR vs a hard BLOCK
+# Ensemble thresholds — being calibrated via PR curve sweep on IEEE-CIS data.
+# Will be adjusted based on precision-recall tradeoff (target: 80% recall @ FPR < 2%)
 ML_CRITICAL_THRESHOLD = 0.92
 ML_FRICTION_THRESHOLD = 0.75
 
