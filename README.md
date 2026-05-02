@@ -12,15 +12,17 @@ A production-grade real-time risk orchestration engine combining **supervised ML
 
 **The Problem:** Legacy fraud vendors are slow (2–3 weeks to deploy rules), expensive ($0.45/transaction), and miss modern attack patterns (synthetic identity fraud, AI-generated behavior). SentryFlow decouples risk logic from engineering deployments, enabling rapid iteration on real data.
 
-**The Result:** Trained on **IEEE-CIS Fraud Detection dataset (590K real e-commerce transactions)** with rigorous temporal evaluation:
+**The Result:** Trained on **IEEE-CIS Fraud Detection dataset (590K real e-commerce transactions)** with rigorous temporal evaluation and three phases of feature engineering:
 
-| Metric | Real Data (IEEE-CIS) |
-|--------|----------------------|
-| **Fraud Detection Recall** | 68% @ <2% FPR |
-| **AUROC** | 0.92 |
-| **AUPRC** | 0.68 |
-| **Decision Latency (p99)** | <30ms |
-| **Policy Deploy Time** | <5 minutes |
+| Metric | Current (Phase 3: 19 features) | Note |
+|--------|------|------|
+| **Fraud Detection Recall** | **22.1%** @ 0.36% FPR | Catch ~1 in 5 frauds with <1% false positives |
+| **AUROC** | **0.8351** | Strong discriminative power; dataset ceiling at ~0.84 |
+| **Precision** | 68.6% | High confidence decisions |
+| **Isolation Forest Recall** | **12.13%** | Anomaly detection effective for zero-days |
+| **Decision Latency (p99)** | **<30ms** | Fast path only; async SHAP in background |
+| **Policy Deploy Time** | **<5 minutes** | Risk managers via dashboard, no code deploy |
+| **Governance** | ✅ **FPR 0.36% < 2% gate** | All decisions pass regulatory requirement |
 
 ---
 
@@ -50,9 +52,12 @@ A production-grade real-time risk orchestration engine combining **supervised ML
 ## ⚙️ Technical Highlights
 
 ### ML Stack
-- **XGBoost (Focal Loss):** Supervised fraud patterns. Trained on 80% of real data; validated on 20% hold-out set.
-- **Isolation Forest:** Unsupervised zero-day detection. Catches synthetic identity clusters that supervised models miss.
-- **Feature Engineering:** 6 DIBB signals engineered from 394 raw IEEE-CIS features (amount, device fingerprint, geographic velocity, address diversity, card frequency, transaction recency). Mutual information analysis ensures signal > noise.
+- **XGBoost (Focal Loss):** Supervised fraud patterns. Trained on 80% of real data; validated on 20% hold-out set. AUROC 0.8351.
+- **Isolation Forest:** Unsupervised zero-day detection. Catches synthetic identity clusters that supervised models miss. Recall improved 6.25pp with graph features.
+- **Feature Engineering (19 features):**
+  - **Phase 1 (6 DIBB):** amount, device_is_emulator, geo_velocity, typing_entropy, card_count, days_since_last_tx
+  - **Phase 2 (9 enriched):** uid_tx_count, uid_amt_mean, uid_amt_std, email_domain_risk, email_domain_freq, card1_addr1_freq, tx_hour, is_late_night, D2_norm
+  - **Phase 3 (4 graph):** graph_degree, graph_cc_size, graph_shared_email_cnt, graph_shared_addr_cnt (91M edges from shared identity attributes)
 
 ### Policy Engine
 - **JsonLogic DSL:** Risk managers author rules without code. Example:
@@ -143,13 +148,22 @@ docs/
 
 ## 🔬 ML Research & Reproducibility
 
-This project is **fully reproducible** with real data:
+This project is **fully reproducible** with real data and comprehensive experiment tracking:
 
+### Experiments Report
+See **`docs/EXPERIMENTS.md`** for complete analysis of three feature engineering phases:
+- **Phase 0:** MLflow tracking infrastructure (reproducibility)
+- **Phase 1:** Threshold calibration (found model discrimination bottleneck)
+- **Phase 2:** 9 enriched features (AUROC 0.776 → 0.8347, +7.6%)
+- **Phase 3:** 4 graph features (AUROC flat, Isolation Forest +6.25pp, Recall +3.84pp)
+
+### Implementation Details
 1. **Data:** IEEE-CIS Fraud Detection (590K transactions, 3.5% fraud rate)
 2. **Feature Research:** `research/eda_ieee_fraud.ipynb` computes mutual information scores for all candidate features
 3. **Training:** `make train` runs Metaflow DAG with temporal 80/20 split (no data leakage)
-4. **Evaluation:** All metrics computed on held-out test set; confusion matrices included
-5. **Documentation:** `docs/development/feature_mapping.md` maps raw IEEE-CIS columns → DIBB signals
+4. **Experiment Tracking:** `make mlflow-ui` shows all runs, metrics, and model artifacts
+5. **Evaluation:** All metrics computed on held-out test set; confusion matrices in MLflow
+6. **Documentation:** `docs/EXPERIMENTS.md` maps IEEE-CIS columns → 19 engineered features with phase-by-phase improvements
 
 ---
 
@@ -211,6 +225,30 @@ make docs-serve # MkDocs on localhost:8000
 ```
 
 For single test: `pytest tests/path/to/test.py::test_name`
+
+---
+
+## 📈 What's Achievable vs. Future Work
+
+### ✅ Current Capabilities (Phase 3 - Optimized)
+- **22.1% fraud recall** @ 0.36% FPR (catch ~1 in 5 frauds, <1% false positives)
+- **12.13% anomaly detection** via Isolation Forest (zero-day synthetic identity clusters)
+- **AUROC 0.8351** (strong model discrimination)
+- **<30ms decision latency** (real-time decisioning)
+- **Full governance** (Nacha 2026 compliance, 4-eyes approval, audit trails)
+
+### ⚠️ Current Limitations
+- **Not achievable with current approach:** 80% recall @ <2% FPR
+  - Would require AUROC >0.90 (IEEE-CIS dataset tops out at ~0.84 with tabular features)
+  - Fundamental issue: dataset lacks external signals (IP reputation, merchant networks, device fingerprinting)
+
+### 🔮 Future Improvements (Phase 4+)
+To reach 80% recall, would require one of:
+1. **External data integration:** IP reputation + merchant networks + BIN risk scores (could improve AUROC to 0.90+)
+2. **Graph Neural Networks:** GraphSAGE embeddings (modest gains, likely +2-5% recall)
+3. **Velocity checks:** Real-time customer behavior profiling (different signal type)
+
+**Decision:** Phase 4 shelved. Current 22% recall @ FPR<0.5% is valuable for fraud prevention. External data integration prioritized as higher-ROI path for future improvement.
 
 ---
 
