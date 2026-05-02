@@ -5,9 +5,10 @@ import pandas as pd
 import numpy as np
 from sklearn.metrics import (
     precision_score, recall_score, f1_score,
-    roc_auc_score, average_precision_score, confusion_matrix,
+    roc_auc_score, average_precision_score, confusion_matrix, precision_recall_curve,
 )
 import json
+import mlflow
 from src.models.train import train_ensemble, FEATURE_COLS
 from src.policies.evaluator import evaluate_policy, batch_orchestrate
 
@@ -171,9 +172,11 @@ class SentryFlowBacktestFlow(FlowSpec):
         self.X_test = X_test
         self.y_test = y_test
         self.test_indices = X_test.index.tolist()
+        self.split_idx = split_idx
 
-        self.xgb_model, self.iso_forest = train_ensemble(X_train, y_train)
+        self.xgb_model, self.iso_forest, self.mlflow_run_id = train_ensemble(X_train, y_train)
         print(f"Trained on {len(X_train):,} samples, evaluating on {len(X_test):,} held-out samples.")
+        print(f"MLflow Run ID: {self.mlflow_run_id}")
         self.next(self.backtest)
 
     @step
@@ -251,6 +254,35 @@ class SentryFlowBacktestFlow(FlowSpec):
             f"Strategy Breakdown → ML_OVERRIDE: {self.ml_override_count} | "
             f"ML_FRICTION: {self.ml_friction_count} | RULE_LED: {strategy_counts.get('RULE_LED', 0)}"
         )
+
+        # Log metrics to MLflow (nested run under the training run)
+        with mlflow.start_run(run_id=self.mlflow_run_id, nested=True):
+            mlflow.log_metrics({
+                "precision":    self.precision,
+                "recall":       self.recall,
+                "fpr":          self.fpr,
+                "f1":           self.f1,
+                "auprc":        self.auprc,
+                "auroc":        self.auroc,
+                "iso_recall":   self.iso_recall,
+                "iso_precision": self.iso_precision,
+                "ml_overrides": self.ml_override_count,
+                "ml_friction":  self.ml_friction_count,
+            })
+            mlflow.set_tags({
+                "policy_version": self.policy_version,
+                "n_train_rows": int(self.split_idx),
+                "n_test_rows": len(self.y_test),
+            })
+
+            # PR curve sweep for threshold calibration
+            precisions, recalls, thresholds = precision_recall_curve(y_true, ml_scores_arr)
+            for p, r, t in zip(precisions, recalls, thresholds):
+                fpr_at_t = ((ml_scores_arr >= t) & (y_true == 0)).sum() / max((y_true == 0).sum(), 1)
+                if r >= 0.80 and fpr_at_t < 0.02:
+                    print(f"    → Calibrated threshold for 80% recall @ FPR<2%: {t:.3f}")
+                    mlflow.log_metric("recommended_threshold_80pct_recall", t)
+                    break
 
         self.next(self.approval_gate)
 
