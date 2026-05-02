@@ -72,6 +72,11 @@ async def risk_check(payload: RiskPayload):
     ml_score = 0.0
     try:
         input_df = pd.DataFrame([data])[FEATURE_COLS]
+        # Ensure all columns are numeric (fill None defaults for optional Phase 2/3 features)
+        input_df = input_df.astype({
+            col: 'float64' for col in FEATURE_COLS
+            if col in input_df.columns and input_df[col].dtype == 'object'
+        })
         proba = ML_MODEL.predict_proba(input_df)
         ml_score = float(proba[0, 1]) if hasattr(proba, 'shape') else float(proba[0][1])
     except Exception as e:
