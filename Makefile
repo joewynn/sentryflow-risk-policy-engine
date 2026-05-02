@@ -1,25 +1,35 @@
+PYTHON := .venv/bin/python3
+UV     := uv
+PYTHONPATH := $(PWD)
+
 setup:
-	pip install -r requirements.txt
-	kaggle datasets download -d ieee-fraud-detection -p data/
+	$(UV) pip install --python $(PYTHON) -r requirements.txt
+	.venv/bin/kaggle competitions download -c ieee-fraud-detection -p data/
 	unzip -o data/ieee-fraud-detection.zip -d data/
 
 lint:
-	ruff check src/ tests/
+	$(PYTHON) -m ruff check src/ tests/
 
 train:
-	python -m metaflow run pipelines/backtest_flow.py --package-suffixes .py
+	PYTHONPATH=$(PYTHONPATH) $(PYTHON) pipelines/backtest_flow.py run
 
 deploy:
-	python src/pipeline/sentryflow_pipeline.py --deploy-endpoint
+	$(PYTHON) src/pipeline/sentryflow_pipeline.py --deploy-endpoint
 
 test:
-	pytest tests/
+	$(PYTHON) -m pytest tests/
 
 up:
 	docker-compose up --build
 
 down:
 	docker-compose down
+
+docs-serve:
+	$(PYTHON) -m mkdocs serve
+
+docs-build:
+	$(PYTHON) -m mkdocs build
 
 # Run the full suite: Setup data, build containers, and start services
 ship-it: setup up
