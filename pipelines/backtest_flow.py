@@ -176,6 +176,23 @@ class SentryFlowBacktestFlow(FlowSpec):
                 warnings.warn("train_identity.csv not found — identity features unavailable")
 
             df = _engineer_dibb_features(df)
+
+            # Add graph features before selecting final columns
+            try:
+                from src.features.graph_features import build_shared_identity_graph, extract_graph_features
+                G = build_shared_identity_graph(df)
+                gf = extract_graph_features(G, df)
+                df = df.join(gf)
+                print(f"  Graph: {G.number_of_nodes():,} nodes, {G.number_of_edges():,} edges")
+            except Exception as e:
+                # Gracefully handle graph build failure by creating default features
+                print(f"  Warning: graph feature extraction failed ({e}), using default values")
+                df["graph_degree"] = 0
+                df["graph_cc_size"] = 1
+                df["graph_shared_email_cnt"] = 0
+                df["graph_shared_addr_cnt"] = 0
+
+            # Now select final columns (includes graph features)
             required_cols = FEATURE_COLS + ["TransactionDT", "isFraud"]
             df = df[required_cols].rename(columns={"isFraud": "is_fraud"})
             df = df.dropna(subset=FEATURE_COLS)
@@ -205,6 +222,36 @@ class SentryFlowBacktestFlow(FlowSpec):
                 "TransactionDT": range(self.sample_size),
             })
             self.policy_version = "v2026.05.synthetic"
+
+        self.next(self.build_graph_features)
+
+    @step
+    def build_graph_features(self):
+        """2. Graph Analytics: compute shared-identity features for synthetic fraud detection."""
+        print("Building transaction graph for synthetic identity detection...")
+
+        # Only on real data (has TransactionID); skip on synthetic
+        if "TransactionID" not in self.data.columns:
+            print("  Skipping graph features (synthetic data — no TransactionID)")
+            self.next(self.train_ensemble_step)
+            return
+
+        try:
+            from src.features.graph_features import build_shared_identity_graph, extract_graph_features
+
+            # Build graph (expensive for large datasets, but one-time)
+            G = build_shared_identity_graph(self.data)
+            print(f"  Graph: {G.number_of_nodes():,} nodes, {G.number_of_edges():,} edges")
+            if G.number_of_nodes() > 0:
+                largest_cc = max(len(c) for c in __import__('networkx').connected_components(G))
+                print(f"  Largest connected component: {largest_cc} nodes")
+
+            # Extract scalar features
+            gf = extract_graph_features(G, self.data)
+            self.data = self.data.join(gf)
+            print(f"  Added graph features: {list(gf.columns)}")
+        except Exception as e:
+            print(f"  Warning: graph feature extraction failed ({e}), continuing without graph features")
 
         self.next(self.train_ensemble_step)
 

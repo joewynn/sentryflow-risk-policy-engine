@@ -53,6 +53,11 @@ class RiskPayload(BaseModel):
     tx_hour: Optional[int] = Field(default=12, ge=0, le=23, description="Hour of day (0-23)")
     is_late_night: Optional[int] = Field(default=0, ge=0, le=1, description="Binary: transaction 22:00-05:00")
     D2_norm: Optional[float] = Field(default=0.0, ge=-365, le=365, description="Days since 2nd-to-last tx, normalized")
+    # Phase 3: Graph features (batch-only — require full transaction graph, default to isolated)
+    graph_degree: Optional[int] = Field(default=0, ge=0, le=1000, description="Shared-attribute connections")
+    graph_cc_size: Optional[int] = Field(default=1, ge=1, le=100000, description="Connected component size (ring size)")
+    graph_shared_email_cnt: Optional[int] = Field(default=0, ge=0, le=1000, description="Neighbors via email domain")
+    graph_shared_addr_cnt: Optional[int] = Field(default=0, ge=0, le=1000, description="Neighbors via address")
 
 
 @router.post("/v1/risk-check")

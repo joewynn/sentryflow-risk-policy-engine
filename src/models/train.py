@@ -31,6 +31,11 @@ FEATURE_COLS = [
     "tx_hour",              # hour of day (fraud patterns may be time-dependent)
     "is_late_night",        # binary: transaction between 22:00-05:00 (suspicious hours)
     "D2_norm",              # days since 2nd-to-last tx, normalized by D1 (gap patterns)
+    # Phase 3: Graph analytics (4 features) — synthetic identity ring detection
+    "graph_degree",         # number of shared-attribute connections
+    "graph_cc_size",        # connected component size (fraud ring size)
+    "graph_shared_email_cnt", # neighbors via email domain (email ring affinity)
+    "graph_shared_addr_cnt", # neighbors via address (address ring affinity)
 ]
 
 
