@@ -21,6 +21,16 @@ FEATURE_COLS = [
     "typing_entropy",
     "card_count",           # C1 — number of cards on billing address (fraud MI=0.008)
     "days_since_last_tx",   # D1 — days since last transaction on card (fraud MI=0.006)
+    # Phase 2: Account-level enrichment (9 features) — from Kaggle top-5% solutions
+    "uid_tx_count",         # transactions on unique customer ID (card1+addr1+D1)
+    "uid_amt_mean",         # average transaction amount per UID
+    "uid_amt_std",          # variance in spending per UID (anomaly signal)
+    "email_domain_risk",    # binary: risky domain (protonmail, anonymous, etc)
+    "email_domain_freq",    # rarity of email domain (rare = higher risk)
+    "card1_addr1_freq",     # frequency of card+address combinations (multi-account fraud)
+    "tx_hour",              # hour of day (fraud patterns may be time-dependent)
+    "is_late_night",        # binary: transaction between 22:00-05:00 (suspicious hours)
+    "D2_norm",              # days since 2nd-to-last tx, normalized by D1 (gap patterns)
 ]
 
 
