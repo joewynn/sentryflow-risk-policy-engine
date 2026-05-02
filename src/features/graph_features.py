@@ -76,16 +76,21 @@ def extract_graph_features(G: nx.Graph, df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame with graph features, indexed by TransactionID or integer index
     """
-    rows = []
+    # Precompute all connected components once (O(N) instead of O(N²))
+    cc_mapping = {}
+    for component in nx.connected_components(G):
+        cc_size = len(component)
+        for node in component:
+            cc_mapping[node] = cc_size
 
-    # Iterate over transactions in order
+    rows = []
     tx_ids = df.index.tolist() if "TransactionID" not in df.columns else df["TransactionID"].tolist()
 
     for tx_id in tx_ids:
         if tx_id in G:
             # Transaction has at least one shared attribute connection
             neighbors = list(G.neighbors(tx_id))
-            cc_nodes = nx.node_connected_component(G, tx_id)
+            cc_size = cc_mapping.get(tx_id, 1)
 
             # Count neighbors by shared attribute type
             email_cnt = 0
@@ -101,7 +106,7 @@ def extract_graph_features(G: nx.Graph, df: pd.DataFrame) -> pd.DataFrame:
             rows.append(
                 {
                     "graph_degree": G.degree(tx_id),
-                    "graph_cc_size": len(cc_nodes),
+                    "graph_cc_size": cc_size,
                     "graph_shared_email_cnt": email_cnt,
                     "graph_shared_addr_cnt": addr_cnt,
                 }
