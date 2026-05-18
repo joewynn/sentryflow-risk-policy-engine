@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from src.policies.evaluator import evaluate_policy, batch_orchestrate
 from src.api.async_explain import start_shadow_shap
-from src.models.train import load_model, FEATURE_COLS
+from src.models.train import load_model_from_zenml, FEATURE_COLS
 
 import pandas as pd
 
@@ -17,9 +17,22 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Tier 1 Scaling: model loaded once at module startup (warm path — no per-request I/O)
-# Loads xgb_fraud_latest.joblib (updated on each approved training run)
-ML_MODEL = load_model()
+# Load the Production-staged model from ZenML MCP once at startup (warm path).
+# Falls back to the local cache if ZenML is unreachable; raises RuntimeError if neither exists.
+# This model was promoted by approval_gate() — only governance-passing models are reachable.
+ML_MODEL = load_model_from_zenml()
+
+def _resolve_model_version_tag() -> str:
+    """Returns 'sentryflow_xgb/v3' for the audit trail, or 'cache' if MCP is unreachable."""
+    try:
+        from zenml.client import Client
+        from zenml.enums import ModelStages
+        mv = Client().get_model_version("sentryflow_xgb", ModelStages.PRODUCTION)
+        return f"sentryflow_xgb/{mv.name}"
+    except Exception:
+        return "cache"
+
+MODEL_VERSION_TAG = _resolve_model_version_tag()
 
 _DEFAULT_RULE = [{"if": {"==": [{"var": "device_is_emulator"}, True]}, "action": "DECLINE"}]
 
@@ -89,7 +102,8 @@ async def risk_check(payload: RiskPayload):
     orchestrated = batch_orchestrate(rule_df, ml_series)
 
     # 4. Async SHAP (fire-and-forget — never blocks response)
-    start_shadow_shap(data)
+    # Pass the already-loaded model so the background thread never touches ZenML or disk.
+    start_shadow_shap(data, model=ML_MODEL)
 
     return {
         "decision": orchestrated['decision'].iloc[0],
@@ -100,5 +114,6 @@ async def risk_check(payload: RiskPayload):
             "audit_id": rule_res['audit']['decision_id'],
             "nacha_code": rule_res['adverse_action_code'],
             "policy_version": rule_res['audit']['policy_version'],
+            "model_version": MODEL_VERSION_TAG,
         }
     }

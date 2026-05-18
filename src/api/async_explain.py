@@ -1,32 +1,39 @@
 # src/api/async_explain.py
-import shap
-import threading
-import logging
 import json
+import logging
+import threading
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
+import shap
 
-from src.models.train import load_model, FEATURE_COLS
+from src.models.train import FEATURE_COLS
 
 logger = logging.getLogger(__name__)
 
 SHAP_AUDIT_DIR = Path("data/shap_audit")
 
 
-def _compute_shap_background(payload: dict, transaction_id: str) -> None:
+def _compute_shap_background(
+    payload: dict,
+    transaction_id: str,
+    model: Any,
+) -> None:
     """
     Runs in a background daemon thread — never blocks the <30ms fast path.
     Computes real SHAP values via TreeExplainer and persists them to data/shap_audit/.
+
+    The model is passed in from the router's module-level ML_MODEL — no ZenML or
+    filesystem access happens here, keeping the background thread lightweight.
     """
     try:
-        model = load_model()
         if not hasattr(model, "get_booster"):
             logger.warning(
-                "SHAP skipped for transaction %s: model has no booster (MockModel in use). "
+                "SHAP skipped for transaction %s: model has no booster (cache miss in use). "
                 "Run 'make train' to enable real explainability.",
                 transaction_id,
             )
@@ -65,12 +72,15 @@ def _compute_shap_background(payload: dict, transaction_id: str) -> None:
         logger.error("Background SHAP failed for transaction %s: %s", transaction_id, e)
 
 
-def start_shadow_shap(payload: dict) -> None:
-    """Fire-and-forget SHAP — called after the fast-path decision is returned."""
+def start_shadow_shap(payload: dict, model: Any) -> None:
+    """
+    Fire-and-forget SHAP — called after the fast-path decision is returned.
+    The caller passes the already-loaded model so this thread never touches ZenML or disk.
+    """
     transaction_id = str(payload.get("transaction_id", "unknown"))
     thread = threading.Thread(
         target=_compute_shap_background,
-        args=(payload, transaction_id),
+        args=(payload, transaction_id, model),
         daemon=True,
     )
     thread.start()

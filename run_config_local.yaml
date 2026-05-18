@@ -1,0 +1,5 @@
+# run_config_local.yaml — local dev config using downloaded IEEE-CIS dataset
+# Usage: SENTRYFLOW_MODEL_NAME=sentryflow_xgb_dev SENTRYFLOW_RUN_CONFIG=run_config_local.yaml python pipelines/training_pipeline.py
+parameters:
+  tx_path: data/train_transaction.csv
+  id_path: data/train_identity.csv

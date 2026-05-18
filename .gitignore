@@ -4,8 +4,12 @@ __pycache__/
 .env
 .DS_Store
 .ipynb_checkpoints
-mlruns/
+.zenml_cache/
+.zenml/
+.zen/
 .metaflow/
+mlruns/
 site/
 docs/project-private.md
 docs/INTERVIEW_PREP.md
+docs/zenml-adoption-2026-05-17.md

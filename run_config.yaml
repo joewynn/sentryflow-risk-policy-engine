@@ -1,0 +1,6 @@
+# run_config.yaml — production pipeline parameters
+# Used by: sentryflow_training_pipeline.with_options(config_path="run_config.yaml")
+# Switch to run_config_dev.yaml for fast iteration on a sample dataset.
+parameters:
+  tx_path: s3://sentryflow-mlops/data/train_transaction.csv
+  id_path: s3://sentryflow-mlops/data/train_identity.csv

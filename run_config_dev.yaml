@@ -1,0 +1,7 @@
+# run_config_dev.yaml — development/sample pipeline parameters
+# Points to a smaller dataset for rapid iteration without full IEEE-CIS cost.
+# Usage: SENTRYFLOW_MODEL_NAME=sentryflow_xgb_dev SENTRYFLOW_RUN_CONFIG=run_config_dev.yaml python pipelines/training_pipeline.py
+# This keeps the main sentryflow_xgb model history clean during experimentation.
+parameters:
+  tx_path: s3://sentryflow-mlops/data/train_transaction_sample.csv
+  id_path: s3://sentryflow-mlops/data/train_identity_sample.csv

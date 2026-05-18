@@ -132,7 +132,7 @@ src/
 └── governance/       # 4-eyes approval queue
 
 pipelines/
-└── backtest_flow.py  # Metaflow DAG: load → train → backtest → approve
+└── training_pipeline.py  # ZenML pipeline: ingest → graph → train → backtest → approve
 
 research/
 ├── eda_ieee_fraud.ipynb     # EDA on 590K real transactions
@@ -152,7 +152,6 @@ This project is **fully reproducible** with real data and comprehensive experime
 
 ### Experiments Report
 See **`docs/EXPERIMENTS.md`** for complete analysis of three feature engineering phases:
-- **Phase 0:** MLflow tracking infrastructure (reproducibility)
 - **Phase 1:** Threshold calibration (found model discrimination bottleneck)
 - **Phase 2:** 9 enriched features (AUROC 0.776 → 0.8347, +7.6%)
 - **Phase 3:** 4 graph features (AUROC flat, Isolation Forest +6.25pp, Recall +3.84pp)
@@ -160,9 +159,9 @@ See **`docs/EXPERIMENTS.md`** for complete analysis of three feature engineering
 ### Implementation Details
 1. **Data:** IEEE-CIS Fraud Detection (590K transactions, 3.5% fraud rate)
 2. **Feature Research:** `research/eda_ieee_fraud.ipynb` computes mutual information scores for all candidate features
-3. **Training:** `make train` runs Metaflow DAG with temporal 80/20 split (no data leakage)
-4. **Experiment Tracking:** `make mlflow-ui` shows all runs, metrics, and model artifacts
-5. **Evaluation:** All metrics computed on held-out test set; confusion matrices in MLflow
+3. **Training:** `make train` runs ZenML pipeline with temporal 80/20 split (no data leakage)
+4. **Experiment Tracking:** `make zenml-ui` launches the ZenML dashboard — runs, metrics, and model versions
+5. **Evaluation:** All metrics computed on held-out test set; governance gate (FPR < 2%) required for promotion
 6. **Documentation:** `docs/EXPERIMENTS.md` maps IEEE-CIS columns → 19 engineered features with phase-by-phase improvements
 
 ---
@@ -183,7 +182,7 @@ See **`docs/EXPERIMENTS.md`** for complete analysis of three feature engineering
 
 **If you're a Software Engineer:**
 - FastAPI + Redis for sub-30ms p99 latency
-- Metaflow for reproducible ML pipelines (local + cloud)
+- ZenML for reproducible ML pipelines with Model Control Plane (local + cloud)
 - Docker for deterministic deployment
 - Pytest + integration testing on real data
 
@@ -220,7 +219,9 @@ Full technical docs available at `http://localhost:8501` when running locally. T
 ```bash
 make lint      # Ruff check src/ tests/
 make test      # Pytest (31 tests, 95%+ coverage)
-make train     # Metaflow backtest on real data
+make train     # ZenML training pipeline on real data (S3 + MCP)
+make train-dev # ZenML pipeline with sample data + isolated model name
+make zenml-ui  # ZenML dashboard on http://localhost:8237
 make docs-serve # MkDocs on localhost:8000
 ```
 
@@ -280,4 +281,4 @@ Contributions welcome. Please ensure:
 
 ## 📬 Questions?
 
-See `docs/getting-started.md` for full walkthrough, or check `CLAUDE.md` for architecture deep-dives.
+See `docs/getting-started.md` for full walkthrough, `CLAUDE.md` for architecture deep-dives, or `docs/zenml-adoption-2026-05-17.md` for the ZenML migration plan and bootstrap commands.

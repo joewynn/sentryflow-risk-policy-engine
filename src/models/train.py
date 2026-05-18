@@ -1,18 +1,10 @@
-import xgboost as xgb
-from sklearn.ensemble import IsolationForest
-from sklearn.model_selection import train_test_split
+import os
+import warnings
+
 import joblib
 import numpy as np
 import pandas as pd
-import os
-import warnings
-import mlflow
-import hashlib
-import subprocess
-import time
 
-MODEL_DIR = "data/models"
-DEFAULT_XGB_NAME = "xgb_fraud"
 FEATURE_COLS = [
     # Phase 1: Core DIBB signals (6 features)
     "amount",
@@ -34,128 +26,182 @@ FEATURE_COLS = [
     # Phase 3: Graph analytics (4 features) — synthetic identity ring detection
     "graph_degree",         # number of shared-attribute connections
     "graph_cc_size",        # connected component size (fraud ring size)
-    "graph_shared_email_cnt", # neighbors via email domain (email ring affinity)
-    "graph_shared_addr_cnt", # neighbors via address (address ring affinity)
+    "graph_shared_email_cnt",  # neighbors via email domain (email ring affinity)
+    "graph_shared_addr_cnt",   # neighbors via address (address ring affinity)
 ]
 
+# Allow Docker containers to bind-mount a persistent volume for the cache.
+# Default ".zenml_cache" works locally; in containers set SENTRYFLOW_MODEL_CACHE_DIR
+# to a path on an attached volume (e.g. /mnt/model-cache) to survive container restarts.
+_CACHE_DIR = os.getenv("SENTRYFLOW_MODEL_CACHE_DIR", ".zenml_cache")
+_CACHE_PATH = os.path.join(_CACHE_DIR, "prod_xgb.joblib")
 
-def train_ensemble(X, y):
+
+def _engineer_dibb_features_standalone(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Trains the 2026-spec ensemble:
-    XGBoost (supervised focal-loss proxy via scale_pos_weight) for known fraud patterns,
-    and Isolation Forest (unsupervised) for zero-day synthetic identity anomalies.
-    Caller must pass a pre-split training set — do not pass the full dataset.
-    MLflow run is started here; metrics logged separately in the pipeline.
-    Returns: (xgb_model, iso_forest, mlflow_run_id)
+    Map IEEE-CIS columns → 19-feature DIBB schema used by the pipeline and models.
+    Promoted from pipelines/backtest_flow.py::_engineer_dibb_features() — identical logic,
+    now importable without the Metaflow dependency.
+
+    Real data MI scores (from IEEE-CIS EDA):
+    - amount: 0.0279 (STRONG)
+    - typing_entropy: 0.0148 (GOOD)
+    - card_count: 0.0078 (USEFUL)
+    - geo_velocity: 0.0065 (WEAK but ok)
+    - days_since_last_tx: 0.0058 (WEAK but ok)
+    - device_is_emulator: 0.0001 (VERY WEAK — kept for backward compat)
     """
-    # Capture git hash for reproducibility
+    df = df.copy()
+
+    # amount — direct mapping
+    df["amount"] = df["TransactionAmt"]
+
+    # device_is_emulator — mobile device + suspicious browser string → bot/emulator proxy
+    if "DeviceType" in df.columns and "id_31" in df.columns:
+        is_mobile = df["DeviceType"] == "mobile"
+        is_suspicious_browser = df["id_31"].str.lower().str.contains(
+            "mobile browser|webview|unknown", na=False
+        )
+        df["device_is_emulator"] = (is_mobile & is_suspicious_browser).astype(int)
+    elif "DeviceType" in df.columns:
+        df["device_is_emulator"] = (df["DeviceType"] == "mobile").astype(int)
+    else:
+        warnings.warn("DeviceType not found — device_is_emulator set to 0")
+        df["device_is_emulator"] = 0
+
+    # geo_velocity — dist1 / D1: higher = farther distance in shorter time = more suspicious
+    if "dist1" in df.columns and "D1" in df.columns:
+        df["geo_velocity"] = (
+            df["dist1"].fillna(0) / df["D1"].clip(lower=1 / 24).fillna(1)
+        ).clip(upper=5000)
+    elif "dist1" in df.columns:
+        df["geo_velocity"] = df["dist1"].fillna(0).clip(upper=5000)
+    else:
+        warnings.warn("dist1 not found — geo_velocity set to 0")
+        df["geo_velocity"] = 0.0
+
+    # typing_entropy — C1 normalized to [0, 6]; more cards = higher anomaly risk
+    if "C1" in df.columns:
+        df["typing_entropy"] = (df["C1"].clip(upper=20) / 20 * 6).fillna(3.0)
+    else:
+        warnings.warn("C1 not found — typing_entropy set to 3.0 (neutral)")
+        df["typing_entropy"] = 3.0
+
+    # card_count — C1 raw (number of cards on billing address)
+    if "C1" in df.columns:
+        df["card_count"] = df["C1"].fillna(0).clip(upper=50)
+    else:
+        warnings.warn("C1 not found — card_count set to 0")
+        df["card_count"] = 0.0
+
+    # days_since_last_tx — D1; INVERSE signal: lower = riskier
+    if "D1" in df.columns:
+        df["days_since_last_tx"] = df["D1"].fillna(df["D1"].median()).clip(upper=365)
+    else:
+        warnings.warn("D1 not found — days_since_last_tx set to 30 (neutral)")
+        df["days_since_last_tx"] = 30.0
+
+    # === PHASE 2: ENRICHED FEATURES FROM IEEE-CIS ===
+
+    # UID aggregations — card1 + addr1 + D1 forms a unique customer surrogate
+    if "card1" in df.columns and "addr1" in df.columns and "D1" in df.columns:
+        df["uid"] = (
+            df["card1"].astype(str) + "_" +
+            df["addr1"].fillna(-1).astype(str) + "_" +
+            df["D1"].fillna(-1).round(0).astype(str)
+        )
+        df["uid_tx_count"] = df.groupby("uid")["TransactionAmt"].transform("count")
+        df["uid_amt_mean"] = df.groupby("uid")["TransactionAmt"].transform("mean")
+        df["uid_amt_std"] = df.groupby("uid")["TransactionAmt"].transform("std").fillna(0)
+    else:
+        df["uid_tx_count"] = 5.0
+        df["uid_amt_mean"] = df["TransactionAmt"].median() if "TransactionAmt" in df.columns else 100.0
+        df["uid_amt_std"] = 0.0
+
+    # Email domain risk — protonmail, anonymous, guerrillamail have 90%+ fraud rate
+    if "P_emaildomain" in df.columns:
+        HIGH_RISK_DOMAINS = {"protonmail.com", "anonymous.com", "guerrillamail.com"}
+        domain_freq = df["P_emaildomain"].value_counts(normalize=True)
+        df["email_domain_risk"] = df["P_emaildomain"].isin(HIGH_RISK_DOMAINS).astype(int)
+        df["email_domain_freq"] = df["P_emaildomain"].map(domain_freq).fillna(0.0)
+    else:
+        df["email_domain_risk"] = 0
+        df["email_domain_freq"] = 0.01
+
+    # Card × address interaction frequency — captures multi-account fraud rings
+    if "card1" in df.columns and "addr1" in df.columns:
+        df["card1_addr1"] = df["card1"].astype(str) + "_" + df["addr1"].fillna(-1).astype(str)
+        df["card1_addr1_freq"] = (
+            df.groupby("card1_addr1")["TransactionID"].transform("count")
+            if "TransactionID" in df.columns else 1.0
+        )
+    else:
+        df["card1_addr1_freq"] = 1.0
+
+    # Temporal signals
+    if "TransactionDT" in df.columns:
+        df["tx_hour"] = ((df["TransactionDT"] // 3600) % 24).astype(int)
+        df["is_late_night"] = ((df["tx_hour"] >= 22) | (df["tx_hour"] <= 5)).astype(int)
+    else:
+        df["tx_hour"] = 12
+        df["is_late_night"] = 0
+
+    # D2_norm — days since second-to-last transaction, normalized by D1
+    if "D2" in df.columns and "D1" in df.columns:
+        df["D2_norm"] = (df["D2"] - df["D1"]).fillna(0).clip(lower=-365, upper=365)
+    else:
+        df["D2_norm"] = 0.0
+
+    # Rename target column so downstream steps access df["is_fraud"] uniformly
+    if "isFraud" in df.columns:
+        df = df.rename(columns={"isFraud": "is_fraud"})
+
+    return df
+
+
+def load_model_from_zenml(
+    model_name: str = "sentryflow_xgb",
+    artifact_name: str = "xgb_model",
+    cache_path: str = _CACHE_PATH,
+):
+    """
+    Load the Production-staged model from ZenML MCP.
+
+    Tier 1 — ZenML MCP: connects to the server, fetches the Production artifact,
+              writes a local cache for outage resilience, and returns the model.
+    Tier 2 — Local cache: if ZenML is unreachable and a cache exists from a prior
+              successful start, loads that instead with a RuntimeWarning.
+    Tier 3 — Hard failure: no MCP + no cache → RuntimeError. The API intentionally
+              refuses to start rather than silently issuing fake risk decisions.
+    """
     try:
-        git_sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode().strip()
-    except Exception:
-        git_sha = "unknown"
+        from zenml.client import Client
+        from zenml.enums import ModelStages
 
-    # Versioned artifact path: data/models/<timestamp>_<git_sha>/
-    run_ts = int(time.time())
-    version_tag = f"{run_ts}_{git_sha}"
-    model_dir = f"{MODEL_DIR}/{version_tag}"
-    os.makedirs(model_dir, exist_ok=True)
+        client = Client()
+        mv = client.get_model_version(
+            model_name_or_id=model_name,
+            model_version_name_or_number_or_id=ModelStages.PRODUCTION,
+        )
+        model = mv.get_artifact(name=artifact_name).load()
+        print(f"Loaded {model_name}/{artifact_name} from ZenML MCP (version: {mv.name})")
 
-    # Internal validation split for eval_metric tracking (separate from the outer test set)
-    X_tr, X_val, y_tr, y_val = train_test_split(X, y, test_size=0.15, random_state=42, stratify=y)
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        joblib.dump(model, cache_path)
+        print(f"Model cached locally at {cache_path}")
+        return model
 
-    neg = int((y_tr == 0).sum())
-    pos = int((y_tr == 1).sum())
-    scale_pos_weight = neg / pos if pos > 0 else 100.0
+    except Exception as exc:
+        if os.path.exists(cache_path):
+            warnings.warn(
+                f"ZenML MCP unreachable ({exc}). Loading last known production model "
+                f"from local cache: {cache_path}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return joblib.load(cache_path)
 
-    xgb_model = xgb.XGBClassifier(
-        n_estimators=100,
-        max_depth=6,
-        learning_rate=0.1,
-        scale_pos_weight=scale_pos_weight,
-        eval_metric="aucpr",
-        random_state=42,
-    )
-    xgb_model.fit(X_tr, y_tr, eval_set=[(X_val, y_val)], verbose=False)
-
-    # Contamination mirrors actual fraud rate in training data (clamped to [0.1%, 10%])
-    fraud_rate = pos / (pos + neg) if (pos + neg) > 0 else 0.01
-    contamination = min(max(fraud_rate, 0.001), 0.1)
-    iso_forest = IsolationForest(contamination=contamination, random_state=42)
-    iso_forest.fit(X_tr)
-
-    # Compute data fingerprint
-    try:
-        data_hash = hashlib.md5(pd.util.hash_pandas_object(X, index=True).values).hexdigest()[:8]
-    except Exception:
-        data_hash = "unknown"
-
-    with mlflow.start_run(run_name=f"train_{version_tag}") as run:
-        # Log hyperparameters
-        mlflow.log_params({
-            "n_estimators": 100,
-            "max_depth": 6,
-            "learning_rate": 0.1,
-            "scale_pos_weight": round(scale_pos_weight, 2),
-            "contamination": round(contamination, 4),
-            "n_features": len(X.columns),
-            "feature_cols": ",".join(X.columns.tolist()),
-            "git_sha": git_sha,
-            "data_hash": data_hash,
-        })
-
-        # Save versioned artifacts
-        xgb_path = f"{model_dir}/xgb_fraud.joblib"
-        iso_path = f"{model_dir}/iso_anomaly.joblib"
-        joblib.dump(xgb_model, xgb_path)
-        joblib.dump(iso_forest, iso_path)
-
-        # Also keep "latest" symlinks for the API to load
-        joblib.dump(xgb_model, f"{MODEL_DIR}/xgb_fraud_latest.joblib")
-        joblib.dump(iso_forest, f"{MODEL_DIR}/iso_anomaly_latest.joblib")
-
-        # Log artifacts
-        mlflow.log_artifact(xgb_path, artifact_path="models")
-        mlflow.log_artifact(iso_path, artifact_path="models")
-        mlflow.log_text(",".join(X.columns.tolist()), "feature_cols.txt")
-
-        mlflow_run_id = run.info.run_id
-
-    return xgb_model, iso_forest, mlflow_run_id
-
-
-def load_model(model_name: str = None):
-    """
-    Loads a trained model by name. Default loads xgb_fraud_latest.joblib.
-    Falls back to MockModel if the file doesn't exist.
-    MockModel is an explicit dev-only fallback — run 'make train' to build a real model.
-    """
-    if model_name is None:
-        model_name = "xgb_fraud_latest"
-
-    path = f"{MODEL_DIR}/{model_name}.joblib"
-    if os.path.exists(path):
-        return joblib.load(path)
-
-    warnings.warn(
-        f"Model file not found at '{path}'. Using MockModel (neutral 2% fraud score). "
-        "Run 'make train' to build a real model.",
-        RuntimeWarning,
-        stacklevel=2,
-    )
-
-    class MockModel:
-        def predict(self, X):
-            return np.zeros(len(X), dtype=int)
-
-        def predict_proba(self, X):
-            n = len(X) if hasattr(X, "__len__") else 1
-            return np.tile([0.98, 0.02], (n, 1))
-
-        @property
-        def feature_importances_(self):
-            return np.full(len(FEATURE_COLS), 1.0 / len(FEATURE_COLS))
-
-        def get_booster(self):
-            raise AttributeError("MockModel has no booster — run 'make train' first")
-
-    return MockModel()
+        raise RuntimeError(
+            f"Cannot load model from ZenML MCP ({exc}) and no local cache exists at "
+            f"'{cache_path}'. Run 'make train' to produce a Production model, then restart."
+        ) from exc

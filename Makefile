@@ -11,14 +11,27 @@ lint:
 	$(PYTHON) -m ruff check src/ tests/
 
 train:
-	MLFLOW_EXPERIMENT_NAME=sentryflow-fraud-detection \
-	PYTHONPATH=$(PYTHONPATH) $(PYTHON) pipelines/backtest_flow.py run
+	PYTHONPATH=$(PYTHONPATH) $(PYTHON) pipelines/training_pipeline.py
 
-mlflow-ui:
-	$(PYTHON) -m mlflow ui --host 0.0.0.0 --port 5000
+train-dev:
+	SENTRYFLOW_MODEL_NAME=sentryflow_xgb_dev \
+	SENTRYFLOW_RUN_CONFIG=run_config_dev.yaml \
+	PYTHONPATH=$(PYTHONPATH) $(PYTHON) pipelines/training_pipeline.py
 
-deploy:
-	$(PYTHON) src/pipeline/sentryflow_pipeline.py --deploy-endpoint
+train-local:
+	SENTRYFLOW_MODEL_NAME=sentryflow_xgb_dev \
+	SENTRYFLOW_RUN_CONFIG=run_config_local.yaml \
+	PYTHONPATH=$(PYTHONPATH) $(PYTHON) pipelines/training_pipeline.py
+
+zenml-ui:
+	zenml up
+
+zenml-status:
+	zenml model list && zenml stack describe
+
+zenml-rollback:
+	@echo "Usage: make zenml-rollback VERSION=<version_number>"
+	zenml model version update sentryflow_xgb $(VERSION) --stage=production
 
 test:
 	$(PYTHON) -m pytest tests/
